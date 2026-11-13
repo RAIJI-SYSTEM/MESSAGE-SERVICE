@@ -1,6 +1,7 @@
 import type { Types } from "mongoose";
 import type { AuthUser } from "../../plugins/auth";
 import { HttpError } from "../../shared/errors";
+import { deleteConversationMedia } from "../messages/message.service";
 import { ConversationMemberModel } from "./conversation-member.model";
 import { ConversationModel, buildDirectKey } from "./conversation.model";
 import { GroupModel } from "./group.model";
@@ -50,6 +51,7 @@ export async function createGroup(name: string, createdBy: string, memberIds: st
 
 /** O documento da conversa sai por último: se falhar no meio, dá para repetir. */
 export async function deleteConversation(conversationId: Id) {
+  await deleteConversationMedia(conversationId); // mensagens, anexos e arquivos no S3
   await ConversationMemberModel.deleteMany({ conversationId });
   await GroupModel.deleteOne({ conversationId });
   await ConversationModel.deleteOne({ _id: conversationId });

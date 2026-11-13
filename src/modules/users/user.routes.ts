@@ -2,8 +2,8 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { HttpError } from "../../shared/errors";
 import { paginationSchema, userIdSchema } from "../../shared/schemas";
-import { ConversationMemberModel } from "../conversations/conversation-member.model";
 import { UserModel } from "./user.model";
+import { deleteUserCascade, ensureUser } from "./user.service";
 
 const idParams = z.object({ id: userIdSchema });
 
@@ -13,14 +13,6 @@ function assertAdmin(req: FastifyRequest) {
 
 function assertSelfOrAdmin(req: FastifyRequest, id: string) {
   if (id !== req.user.id && !req.user.isAdmin) throw new HttpError(403, "forbidden");
-}
-
-function ensureUser(keycloakId: string) {
-  return UserModel.findOneAndUpdate(
-    { keycloakId },
-    { $setOnInsert: { keycloakId } },
-    { upsert: true, returnDocument: "after" },
-  );
 }
 
 // Não há PATCH: o único campo é o id do Keycloak, que não muda
@@ -52,8 +44,8 @@ const userRoutes: FastifyPluginAsync = async (app) => {
   app.delete("/users/:id", async (req, reply) => {
     const { id } = idParams.parse(req.params);
     assertSelfOrAdmin(req, id);
-    await ConversationMemberModel.deleteMany({ userId: id });
-    await UserModel.deleteOne({ keycloakId: id });
+    // Mesma regra da exclusão vinda do Keycloak (evento user.deleted)
+    await deleteUserCascade(id);
     return reply.code(204).send();
   });
 };

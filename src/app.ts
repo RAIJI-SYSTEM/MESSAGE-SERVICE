@@ -3,9 +3,11 @@ import { z } from "zod";
 import conversationRoutes from "./modules/conversations/conversation.routes";
 import { startExpirationJob } from "./modules/conversations/expiration.job";
 import groupRoutes from "./modules/conversations/group.routes";
+import messageRoutes from "./modules/messages/message.routes";
 import userRoutes from "./modules/users/user.routes";
 import auth from "./plugins/auth";
 import mongo from "./plugins/mongo";
+import rabbitmq from "./plugins/rabbitmq";
 import { HttpError } from "./shared/errors";
 
 export function buildApp() {
@@ -24,11 +26,16 @@ export function buildApp() {
     return reply.code(500).send({ error: "internal_error" });
   });
 
+  // Healthcheck interno (compose/Kong) — fora dos plugins com autenticação
+  app.get("/health", async () => ({ status: "ok" }));
+
   app.register(mongo);
+  app.register(rabbitmq); // depois do mongo: os eventos gravam no banco
   app.register(auth);
   app.register(userRoutes);
   app.register(conversationRoutes);
   app.register(groupRoutes);
+  app.register(messageRoutes);
 
   let stopExpirationJob: (() => void) | undefined;
   app.addHook("onReady", async () => {

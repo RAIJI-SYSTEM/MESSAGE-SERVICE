@@ -8,6 +8,10 @@
     "start": "bun src/server.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1164.0",
+    "@aws-sdk/s3-presigned-post": "^3.1164.0",
+    "@aws-sdk/s3-request-presigner": "^3.1164.0",
+    "amqplib": "^2.3.1",
     "fastify": "^5.12.8",
     "fastify-plugin": "^6.0.1",
     "jose": "^6.2.15",
