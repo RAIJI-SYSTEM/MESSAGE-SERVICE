@@ -23,6 +23,19 @@ export const rideEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ride.participant_left"), rideId, userId: userIdSchema }),
   z.object({ type: z.literal("ride.finished"), rideId, occurredAt: timestamp }),
   z.object({ type: z.literal("ride.cancelled"), rideId, occurredAt: timestamp }),
+  // Foto completa da carona, enviada pelo backend a cada mudança (ver syncRide)
+  z.object({
+    type: z.literal("ride.synced"),
+    rideId,
+    driverId: userIdSchema,
+    driverName: z.string().max(200).nullish(),
+    name: z.string().trim().min(1).max(100),
+    origin: z.string().max(200),
+    destination: z.string().max(200),
+    status: z.enum(["PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"]),
+    occurredAt: timestamp,
+    passengers: z.array(z.object({ userId: userIdSchema, name: z.string().max(200).nullish() })).max(100),
+  }),
 ]);
 export type RideEvent = z.infer<typeof rideEventSchema>;
 
@@ -71,6 +84,8 @@ export async function handleRideEvent(raw: unknown) {
       await ConversationMemberModel.deleteOne({ conversationId: conversation._id, userId: event.userId });
       return;
     }
+    case "ride.synced":
+      return syncRide(event);
     case "ride.finished":
     case "ride.cancelled": {
       const expiresAt = new Date(Date.parse(event.occurredAt) + RETENTION_AFTER_RIDE_MS);
@@ -80,4 +95,66 @@ export async function handleRideEvent(raw: unknown) {
       return;
     }
   }
+}
+
+type RideSynced = Extract<RideEvent, { type: "ride.synced" }>;
+
+/**
+ * Deixa o grupo igual à carona: motorista + passageiros aceitos, com nomes e papéis.
+ * - Sem passageiros e sem grupo ainda: não cria (motorista sozinho não precisa de grupo).
+ * - Quem saiu da lista sai do grupo (cancelou a reserva).
+ * - Carona concluída ou cancelada: o grupo some 3 dias depois.
+ */
+async function syncRide(event: RideSynced) {
+  const existing = await ConversationModel.findOne({ rideId: event.rideId });
+  if (!existing && event.passengers.length === 0) return;
+
+  const ended = event.status === "COMPLETED" || event.status === "CANCELLED";
+  const context = {
+    kind: "ride" as const,
+    refId: event.rideId,
+    label: "Grupo da viagem",
+    origin: event.origin,
+    destination: event.destination,
+    subId: null,
+  };
+  const conversation = await ConversationModel.findOneAndUpdate(
+    { rideId: event.rideId },
+    {
+      $setOnInsert: { type: "group" },
+      $set: {
+        context,
+        expiresAt: ended ? new Date(Date.parse(event.occurredAt) + RETENTION_AFTER_RIDE_MS) : null,
+      },
+    },
+    { upsert: true, returnDocument: "after" },
+  );
+  await GroupModel.updateOne(
+    { conversationId: conversation._id },
+    { $set: { name: event.name }, $setOnInsert: { createdBy: event.driverId } },
+    { upsert: true },
+  );
+
+  const members = [
+    { userId: event.driverId, name: event.driverName ?? null, role: "driver" as const },
+    ...event.passengers
+      .filter((p) => p.userId !== event.driverId)
+      .map((p) => ({ userId: p.userId, name: p.name ?? null, role: "passenger" as const })),
+  ];
+  await ConversationMemberModel.bulkWrite(
+    members.map((m) => ({
+      updateOne: {
+        filter: { conversationId: conversation._id, userId: m.userId },
+        update: {
+          $set: { role: m.role, ...(m.name ? { name: m.name } : {}) },
+          $setOnInsert: { joinedAt: new Date() },
+        },
+        upsert: true,
+      },
+    })),
+  );
+  await ConversationMemberModel.deleteMany({
+    conversationId: conversation._id,
+    userId: { $nin: members.map((m) => m.userId) },
+  });
 }

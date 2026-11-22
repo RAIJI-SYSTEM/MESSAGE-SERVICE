@@ -9,6 +9,8 @@ const JWKS_CACHE_MS = 24 * 60 * 60 * 1000;
 export interface AuthUser {
   id: string;
   isAdmin: boolean;
+  /** Nome de exibição do token (claim "name"), se houver */
+  name: string | null;
 }
 
 declare module "fastify" {
@@ -33,7 +35,11 @@ export default fp(async (app) => {
     if (!header?.startsWith("Bearer ")) throw new HttpError(401, "missing_token");
 
     try {
-      const { payload } = await jwtVerify<{ realm_access?: { roles?: string[] } }>(
+      const { payload } = await jwtVerify<{
+        realm_access?: { roles?: string[] };
+        name?: string;
+        preferred_username?: string;
+      }>(
         header.slice(7),
         jwks,
         { issuer, audience, algorithms: ["RS256"] },
@@ -42,6 +48,7 @@ export default fp(async (app) => {
       req.user = {
         id: payload.sub,
         isAdmin: payload.realm_access?.roles?.includes(ADMIN_ROLE) ?? false,
+        name: payload.name?.trim() || payload.preferred_username || null,
       };
     } catch (err) {
       req.log.debug({ err }, "token inválido");

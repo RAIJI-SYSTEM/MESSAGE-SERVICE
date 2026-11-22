@@ -1,7 +1,9 @@
 import type { Types } from "mongoose";
 import type { AuthUser } from "../../plugins/auth";
 import { HttpError } from "../../shared/errors";
-import { deleteConversationMedia } from "../messages/message.service";
+import { MessageModel } from "../messages/message.model";
+import { deleteConversationMedia, toPreviewDto } from "../messages/message.service";
+import { UserModel } from "../users/user.model";
 import { ConversationMemberModel } from "./conversation-member.model";
 import { ConversationModel, buildDirectKey } from "./conversation.model";
 import { GroupModel } from "./group.model";
@@ -104,4 +106,94 @@ export async function listConversations(
   }).lean();
   const byConversation = new Map(groups.map((g) => [String(g.conversationId), g]));
   return conversations.map((c) => ({ ...c, group: byConversation.get(String(c._id)) ?? null }));
+}
+
+// ---------------------------------------------------------------------------
+// Conversa direta aberta pelo app (ex.: "Mandar mensagem" ao motorista de uma carona)
+// ---------------------------------------------------------------------------
+
+export type MemberRole = "driver" | "passenger" | "company";
+
+export interface ConversationContext {
+  kind: "ride" | "delivery";
+  refId: string;
+  label: string;
+  origin: string;
+  destination: string;
+  subId?: string | null;
+}
+
+export interface OpenDirectRequest {
+  userId: string;
+  /** Nome de quem vai receber, como o app conhece (vale até a pessoa usar o chat) */
+  name?: string;
+  role?: MemberRole;
+  myRole?: MemberRole;
+  context?: ConversationContext;
+}
+
+/** Abre (ou reabre) a conversa direta e atualiza papéis, nomes e o assunto (corrida/encomenda). */
+export async function openDirect(me: AuthUser, request: OpenDirectRequest) {
+  const conversation = await findOrCreateDirect(me.id, request.userId);
+  const updates: Promise<unknown>[] = [];
+  if (request.name || request.role) {
+    updates.push(
+      ConversationMemberModel.updateOne(
+        { conversationId: conversation._id, userId: request.userId },
+        { $set: { ...(request.name && { name: request.name }), ...(request.role && { role: request.role }) } },
+      ),
+    );
+  }
+  updates.push(
+    ConversationMemberModel.updateOne(
+      { conversationId: conversation._id, userId: me.id },
+      { $set: { ...(me.name && { name: me.name }), ...(request.myRole && { role: request.myRole }) } },
+    ),
+  );
+  if (request.context) {
+    updates.push(ConversationModel.updateOne({ _id: conversation._id }, { $set: { context: request.context } }));
+  }
+  await Promise.all(updates);
+  return conversation;
+}
+
+/** Marca como lido até agora (abrir a conversa) */
+export async function markRead(conversationId: Id, userId: string) {
+  await ConversationMemberModel.updateOne({ conversationId, userId }, { $set: { lastReadAt: new Date() } });
+}
+
+/**
+ * Formato da conversa para o app: membros com nome e papel, última mensagem e não lidas.
+ * O nome do próprio usuário (do token dele) tem prioridade sobre o informado por quem abriu a conversa.
+ */
+export async function describeConversations<T extends { _id: Types.ObjectId }>(conversations: T[], userId: string) {
+  if (!conversations.length) return [];
+  const ids = conversations.map((c) => c._id);
+  const members = await ConversationMemberModel.find({ conversationId: { $in: ids } }).lean();
+  const users = await UserModel.find({ keycloakId: { $in: [...new Set(members.map((m) => m.userId))] } }, "keycloakId name").lean();
+  const nameOf = new Map(users.map((u) => [u.keycloakId, u.name ?? null]));
+  const groups = await GroupModel.find({ conversationId: { $in: ids } }, "conversationId name").lean();
+  const groupOf = new Map(groups.map((g) => [String(g.conversationId), { name: g.name }]));
+
+  return Promise.all(
+    conversations.map(async (c) => {
+      const mine = members.filter((m) => String(m.conversationId) === String(c._id));
+      const me = mine.find((m) => m.userId === userId);
+      const [last, unreadCount] = await Promise.all([
+        MessageModel.findOne({ conversationId: c._id }).sort({ createdAt: -1, _id: -1 }).lean(),
+        MessageModel.countDocuments({
+          conversationId: c._id,
+          senderId: { $ne: userId },
+          ...(me?.lastReadAt ? { createdAt: { $gt: me.lastReadAt } } : {}),
+        }),
+      ]);
+      return {
+        ...c,
+        members: mine.map((m) => ({ userId: m.userId, name: nameOf.get(m.userId) ?? m.name ?? null, role: m.role ?? null })),
+        lastMessage: last ? toPreviewDto(last) : null,
+        unreadCount,
+        group: groupOf.get(String(c._id)) ?? null,
+      };
+    }),
+  );
 }

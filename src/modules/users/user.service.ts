@@ -4,6 +4,16 @@ import { deleteConversation } from "../conversations/conversation.service";
 import { GroupModel } from "../conversations/group.model";
 import { UserModel } from "./user.model";
 
+/** Último nome gravado de cada usuário: evita uma escrita no banco a cada requisição */
+const knownNames = new Map<string, string>();
+
+/** Guarda o nome do token do usuário (só grava quando muda). */
+export async function rememberName(keycloakId: string, name: string | null) {
+  if (!name || knownNames.get(keycloakId) === name) return;
+  await UserModel.updateOne({ keycloakId }, { $set: { name }, $setOnInsert: { keycloakId } }, { upsert: true });
+  knownNames.set(keycloakId, name);
+}
+
 /** Idempotente: cria o usuário só se ainda não existir. */
 export function ensureUser(keycloakId: string) {
   return UserModel.findOneAndUpdate(

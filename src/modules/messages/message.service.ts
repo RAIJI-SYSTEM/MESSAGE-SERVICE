@@ -84,6 +84,26 @@ async function toAttachmentDto(attachment: AttachmentLike, withUrl: boolean) {
   };
 }
 
+/** Prévia da última mensagem (lista de conversas): sem gerar links de download */
+export function toPreviewDto(message: MessageLike) {
+  return {
+    id: String(message._id),
+    senderId: message.senderId,
+    text: message.text ?? "",
+    attachments: (message.attachments ?? []).map((a) => ({
+      id: String(a._id),
+      type: a.type,
+      name: a.name,
+      mimeType: a.mimeType,
+      sizeBytes: a.sizeBytes,
+      url: null,
+      expiresAt: a.expiresAt.toISOString(),
+      expired: a.expiresAt.getTime() <= Date.now(),
+    })),
+    sentAt: message.createdAt.toISOString(),
+  };
+}
+
 /** Formato do `ChatMessage` do app */
 async function toMessageDto(message: MessageLike) {
   return {

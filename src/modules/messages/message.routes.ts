@@ -1,8 +1,11 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { objectIdSchema } from "../../shared/schemas";
-import { requireConversation } from "../conversations/conversation.service";
+import { markRead, requireConversation } from "../conversations/conversation.service";
+import { rememberName } from "../users/user.service";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_TEXT_LENGTH } from "./attachment-rules";
+import { CHAT_EXCHANGE } from "../../plugins/rabbitmq";
+import { messageCreatedEvent } from "./message-events";
 import { createUpload, listMessages, sendMessage } from "./message.service";
 
 const idParams = z.object({ id: objectIdSchema });
@@ -32,6 +35,7 @@ const listQuery = z.object({
  */
 const messageRoutes: FastifyPluginAsync = async (app) => {
   app.addHook("onRequest", app.authenticate);
+  app.addHook("preHandler", async (req) => rememberName(req.user.id, req.user.name));
 
   app.post("/conversations/:id/attachments", async (req, reply) => {
     const { id } = idParams.parse(req.params);
@@ -44,13 +48,20 @@ const messageRoutes: FastifyPluginAsync = async (app) => {
     const { id } = idParams.parse(req.params);
     const body = messageBody.parse(req.body);
     await requireConversation(id, req.user);
-    return reply.code(201).send(await sendMessage(id, req.user.id, body));
+    const sent = await sendMessage(id, req.user.id, body);
+    // Push para os outros membros (pelo backend); falhar aqui nunca impede a mensagem
+    messageCreatedEvent(id, req.user, sent)
+      .then((event) => event && app.publishEvent(CHAT_EXCHANGE, "message.created", event))
+      .catch((err) => req.log.warn({ err }, "evento de mensagem nova não publicado"));
+    return reply.code(201).send(sent);
   });
 
   app.get("/conversations/:id/messages", async (req) => {
     const { id } = idParams.parse(req.params);
     const { limit, before } = listQuery.parse(req.query);
     await requireConversation(id, req.user);
+    // Ler as mensagens mais recentes = conversa lida
+    if (!before) await markRead(id, req.user.id);
     return listMessages(id, { limit, before: before ? new Date(before) : undefined });
   });
 };
