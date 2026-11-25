@@ -1,2 +1,10 @@
 node_modules/
 .env
+
+
+# --- Testes de carga (load-tests — Locust) ---
+.venv/
+users.csv
+reports/
+__pycache__/
+*.pyc
