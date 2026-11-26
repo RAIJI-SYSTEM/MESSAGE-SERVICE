@@ -1,6 +1,9 @@
 node_modules/
 .env
 
+# Relatórios gerados pelo Vitest
+coverage/
+
 
 # --- Testes de carga (load-tests — Locust) ---
 .venv/
