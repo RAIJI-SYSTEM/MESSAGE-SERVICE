@@ -16,6 +16,22 @@ export interface E2EUser {
 
 export const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
+/** Data/hora de parede de Brasília, formato aceito pelo LocalDateTime do backend. */
+export function localDateTime(date: Date): string {
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  })
+    .format(date)
+    .replace(" ", "T");
+}
+
 function randomSuffix() {
   return `${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 }
