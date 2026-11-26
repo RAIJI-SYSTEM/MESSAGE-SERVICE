@@ -8,3 +8,6 @@ users.csv
 reports/
 __pycache__/
 *.pyc
+
+# --- Testes (Vitest) ---
+coverage/
