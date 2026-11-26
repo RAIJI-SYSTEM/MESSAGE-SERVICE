@@ -81,3 +81,31 @@ cd ~/Documentos/integrador-raiji/load-tests
   códigos aceitos); 401/403 em massa indicam token/role — rode `./run.sh seed`.
 - Compare `api:` com `front(bff):` para o mesmo endpoint: a diferença é o custo
   do proxy do Next.
+
+
+## Mensageria (AMQP)
+
+Testa a **ingestão** de eventos no chat (o que o monolito e o Keycloak
+publicam), além da ida e volta no exchange `raiji.chat`. Locust não fala AMQP
+nativamente: a suíte usa `pika` e publica as métricas como `request_type=AMQP`,
+nos mesmos relatórios de `reports/`.
+
+```bash
+./run-messaging.sh deps          # instala Locust + pika
+./run-messaging.sh smoke         # 5 VUs, 20 s (ingest + probe)
+./run-messaging.sh load          # 30 VUs, rampa 3/s, 120 s
+./run-messaging.sh ride          # só ride.created/synced/finished/participant
+./run-messaging.sh user          # só user.created/user.deleted
+./run-messaging.sh egress        # só message.created (push)
+./run-messaging.sh probe         # só ida e volta no raiji.chat
+```
+
+- `publish ride.*` → exchange `raiji.rides` (grupos do chat);
+- `publish user.*` → exchange `raiji.users` (ciclo de vida do usuário);
+- `publish message.created` → exchange `raiji.chat` (push no monolito);
+- `consume raiji.chat (probe)` → latência de ida e volta no broker.
+
+O probe usa `RAIJI_AMQP_PROBE_ROUTING_KEY=loadtest.probe` por padrão para não
+acordar o monolito; defina `message.created` para exercitar o caminho real.
+Isto mede **vazão e latência**: contrato, DLQ e retry continuam nos testes
+funcionais (Vitest/JUnit).
