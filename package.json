@@ -9,7 +9,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "mutation": "stryker run"
+    "mutation": "stryker run",
+    "test:report": "bash scripts/run-all-tests.sh"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1164.0",
