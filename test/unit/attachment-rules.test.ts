@@ -24,12 +24,31 @@ describe("[Regressão] attachment-rules", () => {
     expect(baseMimeType(" IMAGE/PNG ")).toBe("image/png");
   });
 
-  it("classifica imagem, documento e áudio permitidos", () => {
-    expect(attachmentTypeFor("image/jpeg")).toBe("image");
-    expect(attachmentTypeFor("image/heic")).toBe("image");
-    expect(attachmentTypeFor("application/pdf")).toBe("document");
-    expect(attachmentTypeFor("text/plain")).toBe("document");
-    expect(attachmentTypeFor("audio/webm;codecs=opus")).toBe("audio");
+  it("classifica todos os MIME permitidos (imagem, documento e áudio)", () => {
+    const permitidos: Array<[string, "image" | "document" | "audio"]> = [
+      ["image/jpeg", "image"],
+      ["image/png", "image"],
+      ["image/webp", "image"],
+      ["image/gif", "image"],
+      ["image/heic", "image"],
+      ["image/heif", "image"],
+      ["application/pdf", "document"],
+      ["text/plain", "document"],
+      ["application/msword", "document"],
+      ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "document"],
+      ["application/vnd.ms-excel", "document"],
+      ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "document"],
+      ["audio/webm;codecs=opus", "audio"],
+      ["audio/ogg", "audio"],
+      ["audio/mp4", "audio"],
+      ["audio/mpeg", "audio"],
+      ["audio/wav", "audio"],
+      ["audio/aac", "audio"],
+    ];
+
+    for (const [mime, tipo] of permitidos) {
+      expect(attachmentTypeFor(mime), mime).toBe(tipo);
+    }
   });
 
   it("bloqueia SVG, HTML e tipos desconhecidos", () => {

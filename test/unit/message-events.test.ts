@@ -47,6 +47,10 @@ describe("[Regressão] messageCreatedEvent", () => {
       preview: "Oi, chego em 10 minutos",
       recipientIds: ["u2"],
     });
+
+    // Consulta escopada na conversa e projeção enxuta (não carregar tudo)
+    expect(memberFind).toHaveBeenCalledWith({ conversationId: "c1" }, "userId name");
+    expect(groupFindOne).toHaveBeenCalledWith({ conversationId: "c1" }, "name");
   });
 
   it("grupo: título do grupo e prévia com o primeiro nome", async () => {
@@ -86,6 +90,38 @@ describe("[Regressão] messageCreatedEvent", () => {
 
     expect(event?.preview).toHaveLength(140);
     expect(event?.preview.endsWith("…")).toBe(true);
+  });
+
+  it("texto com exatamente 140 caracteres não é cortado", async () => {
+    memberFind.mockReturnValue(lean([{ userId: "u1", name: "Ana" }, { userId: "u2", name: "Bia" }]));
+    groupFindOne.mockReturnValue(lean(null));
+
+    const texto = "y".repeat(140);
+    const event = await messageCreatedEvent("c1", sender, { text: texto, attachments: [] });
+
+    expect(event?.preview).toBe(texto);
+    expect(event?.preview.endsWith("…")).toBe(false);
+  });
+
+  it("anexo de tipo desconhecido usa a prévia genérica", async () => {
+    memberFind.mockReturnValue(lean([{ userId: "u1", name: "Ana" }, { userId: "u2", name: "Bia" }]));
+    groupFindOne.mockReturnValue(lean(null));
+
+    const event = await messageCreatedEvent("c1", sender, {
+      text: "",
+      attachments: [{ type: "video" }],
+    });
+
+    expect(event?.preview).toBe("📎 Arquivo");
+  });
+
+  it("sem texto e sem anexo usa 'Nova mensagem'", async () => {
+    memberFind.mockReturnValue(lean([{ userId: "u1", name: "Ana" }, { userId: "u2", name: "Bia" }]));
+    groupFindOne.mockReturnValue(lean(null));
+
+    const event = await messageCreatedEvent("c1", sender, { text: "", attachments: [] });
+
+    expect(event?.preview).toBe("Nova mensagem");
   });
 
   it("sem destinatários não publica evento", async () => {

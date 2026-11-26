@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * [Regressão][Análise de Falhas] Eventos de carona (RabbitMQ).
@@ -35,7 +35,11 @@ vi.mock("../../src/modules/conversations/group.model", () => ({
 }));
 vi.mock("../../src/modules/conversations/conversation.service", () => ({ addMembers }));
 
-import { RideNotFoundError, handleRideEvent } from "../../src/modules/rides/ride-events";
+import {
+  RideNotFoundError,
+  handleRideEvent,
+  rideEventSchema,
+} from "../../src/modules/rides/ride-events";
 
 const THREE_DAYS = 3 * 24 * 60 * 60 * 1000;
 
@@ -44,6 +48,10 @@ beforeEach(() => {
   conversationFindOneAndUpdate.mockResolvedValue({ _id: "c1" });
   conversationFindOne.mockResolvedValue({ _id: "c1" });
   conversationUpdateOne.mockResolvedValue({ matchedCount: 1 });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("[Regressão] ride.created", () => {
@@ -88,6 +96,7 @@ describe("[Análise de Falhas] participantes", () => {
   it("entrada de participante adiciona ao grupo", async () => {
     await handleRideEvent({ type: "ride.participant_joined", rideId: "r1", userId: "p1" });
 
+    expect(conversationFindOne).toHaveBeenCalledWith({ rideId: "r1" });
     expect(addMembers).toHaveBeenCalledWith("c1", ["p1"]);
   });
 
@@ -100,9 +109,11 @@ describe("[Análise de Falhas] participantes", () => {
   it("evento antes de ride.created vira RideNotFoundError (retry, não DLQ)", async () => {
     conversationFindOne.mockResolvedValue(null);
 
-    await expect(
-      handleRideEvent({ type: "ride.participant_joined", rideId: "r1", userId: "p1" }),
-    ).rejects.toBeInstanceOf(RideNotFoundError);
+    const error = await handleRideEvent({ type: "ride.participant_joined", rideId: "r1", userId: "p1" })
+      .catch((e) => e);
+
+    expect(error).toBeInstanceOf(RideNotFoundError);
+    expect(error.message).toBe("carona r1 sem conversa");
   });
 });
 
@@ -227,5 +238,244 @@ describe("[Regressão] ride.synced", () => {
       }),
       { upsert: true, returnDocument: "after" },
     );
+  });
+
+  it("carona cancelada também agenda expiração", async () => {
+    const occurredAt = "2026-11-26T12:00:00.000Z";
+    conversationFindOne.mockResolvedValue({ _id: "c1" });
+
+    await handleRideEvent({
+      type: "ride.synced",
+      rideId: "r1",
+      driverId: "d1",
+      driverName: "Carlos",
+      name: "Carona",
+      origin: "São Paulo",
+      destination: "Campinas",
+      status: "CANCELLED",
+      occurredAt,
+      passengers: [{ userId: "p1", name: "Ana" }],
+    });
+
+    expect(conversationFindOneAndUpdate).toHaveBeenCalledWith(
+      { rideId: "r1" },
+      expect.objectContaining({
+        $set: expect.objectContaining({ expiresAt: new Date(Date.parse(occurredAt) + THREE_DAYS) }),
+      }),
+      { upsert: true, returnDocument: "after" },
+    );
+  });
+
+  it("já existe conversa e não há passageiro: ainda sincroniza o grupo do motorista", async () => {
+    conversationFindOne.mockResolvedValue({ _id: "c1" });
+
+    await handleRideEvent({
+      type: "ride.synced",
+      rideId: "r1",
+      driverId: "d1",
+      driverName: "Carlos",
+      name: "Carona",
+      origin: "São Paulo",
+      destination: "Campinas",
+      status: "PLANNED",
+      occurredAt: "2026-11-26T12:00:00.000Z",
+      passengers: [],
+    });
+
+    expect(conversationFindOne).toHaveBeenCalledWith({ rideId: "r1" });
+    expect(conversationFindOneAndUpdate).toHaveBeenCalled();
+    expect(memberBulkWrite).toHaveBeenCalled();
+  });
+
+  it("sem conversa existente, mas com passageiro, cria o grupo", async () => {
+    conversationFindOne.mockResolvedValue(null);
+
+    await handleRideEvent({
+      type: "ride.synced",
+      rideId: "r1",
+      driverId: "d1",
+      driverName: "Carlos",
+      name: "Carona",
+      origin: "São Paulo",
+      destination: "Campinas",
+      status: "PLANNED",
+      occurredAt: "2026-11-26T12:00:00.000Z",
+      passengers: [{ userId: "p1", name: "Ana" }],
+    });
+
+    expect(conversationFindOne).toHaveBeenCalledWith({ rideId: "r1" });
+    expect(conversationFindOneAndUpdate).toHaveBeenCalled();
+    expect(memberBulkWrite).toHaveBeenCalled();
+  });
+
+  it("grava contexto, nomes, papel, joinedAt e upsert na sincronização", async () => {
+    conversationFindOne.mockResolvedValue({ _id: "c1" });
+
+    await handleRideEvent({
+      type: "ride.synced",
+      rideId: "r1",
+      driverId: "d1",
+      driverName: "Carlos",
+      name: "Carona",
+      origin: "São Paulo",
+      destination: "Campinas",
+      status: "PLANNED",
+      occurredAt: "2026-11-26T12:00:00.000Z",
+      passengers: [{ userId: "p1", name: "Ana" }],
+    });
+
+    expect(conversationFindOneAndUpdate).toHaveBeenCalledWith(
+      { rideId: "r1" },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          context: {
+            kind: "ride",
+            refId: "r1",
+            label: "Grupo da viagem",
+            origin: "São Paulo",
+            destination: "Campinas",
+            subId: null,
+          },
+        }),
+      }),
+      { upsert: true, returnDocument: "after" },
+    );
+
+    const operations = memberBulkWrite.mock.calls[0]![0] as Array<{
+      updateOne: {
+        update: { $set: { role: string; name?: string }; $setOnInsert: { joinedAt: Date } };
+        upsert: boolean;
+      };
+    }>;
+    expect(operations[0]!.updateOne.update.$set).toMatchObject({ role: "driver", name: "Carlos" });
+    expect(operations[1]!.updateOne.update.$set).toMatchObject({ role: "passenger", name: "Ana" });
+    for (const operation of operations) {
+      expect(operation.updateOne.update.$setOnInsert.joinedAt).toBeInstanceOf(Date);
+      expect(operation.updateOne.upsert).toBe(true);
+    }
+  });
+
+  it("nome do motorista/passageiro nulo é gravado como null", async () => {
+    conversationFindOne.mockResolvedValue({ _id: "c1" });
+
+    await handleRideEvent({
+      type: "ride.synced",
+      rideId: "r1",
+      driverId: "d1",
+      driverName: null,
+      name: "Carona",
+      origin: "São Paulo",
+      destination: "Campinas",
+      status: "PLANNED",
+      occurredAt: "2026-11-26T12:00:00.000Z",
+      passengers: [{ userId: "p1", name: null }],
+    });
+
+    const operations = memberBulkWrite.mock.calls[0]![0] as Array<{
+      updateOne: { update: { $set: { name?: string | null } } };
+    }>;
+    expect(operations[0]!.updateOne.update.$set).not.toHaveProperty("name");
+    expect(operations[1]!.updateOne.update.$set).not.toHaveProperty("name");
+  });
+
+  it("expiração exatamente igual a agora não é tratada como futura (sem retry)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-26T12:00:00.000Z"));
+    conversationUpdateOne.mockResolvedValue({ matchedCount: 0 });
+
+    await expect(
+      handleRideEvent({
+        type: "ride.finished",
+        rideId: "r1",
+        occurredAt: "2026-11-23T12:00:00.000Z",
+      }),
+    ).resolves.toBeUndefined();
+
+    vi.useRealTimers();
+  });
+});
+
+describe("[Mutação] schemas de ride-events", () => {
+  it("ride.created aplica passengerIds=[] e faz trim do nome", () => {
+    const event = rideEventSchema.parse({
+      type: "ride.created",
+      rideId: "r1",
+      driverId: "d1",
+      name: "  Carona X  ",
+    });
+
+    expect(event).toMatchObject({
+      type: "ride.created",
+      passengerIds: [],
+      name: "Carona X",
+    });
+  });
+
+  it("exige timestamp com offset", () => {
+    expect(() =>
+      rideEventSchema.parse({
+        type: "ride.finished",
+        rideId: "r1",
+        occurredAt: "2026-11-26T12:00:00",
+      }),
+    ).toThrow();
+
+    expect(() =>
+      rideEventSchema.parse({
+        type: "ride.finished",
+        rideId: "r1",
+        occurredAt: "2026-11-26T12:00:00-03:00",
+      }),
+    ).not.toThrow();
+  });
+
+  it("aceita todos os status válidos e rejeita desconhecido/vazio", () => {
+    for (const status of ["PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"]) {
+      expect(() =>
+        rideEventSchema.parse({
+          type: "ride.synced",
+          rideId: "r1",
+          driverId: "d1",
+          name: "Carona",
+          origin: "SP",
+          destination: "Campinas",
+          status,
+          occurredAt: "2026-11-26T12:00:00-03:00",
+          passengers: [],
+        }),
+      ).not.toThrow();
+    }
+
+    for (const status of ["INVALID", ""]) {
+      expect(() =>
+        rideEventSchema.parse({
+          type: "ride.synced",
+          rideId: "r1",
+          driverId: "d1",
+          name: "Carona",
+          origin: "SP",
+          destination: "Campinas",
+          status,
+          occurredAt: "2026-11-26T12:00:00-03:00",
+          passengers: [],
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("faz trim do nome do grupo no ride.synced", () => {
+    const event = rideEventSchema.parse({
+      type: "ride.synced",
+      rideId: "r1",
+      driverId: "d1",
+      name: "  Carona  ",
+      origin: "SP",
+      destination: "Campinas",
+      status: "PLANNED",
+      occurredAt: "2026-11-26T12:00:00-03:00",
+      passengers: [],
+    });
+
+    expect(event.name).toBe("Carona");
   });
 });
