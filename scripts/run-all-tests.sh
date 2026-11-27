@@ -51,6 +51,7 @@ else
 fi
 
 python3 "$ROOT/scripts/reporting/build_index.py" "$OUT" vitest
+python3 "$ROOT/scripts/reporting/organize_reports.py" "$ROOT" "message-service"
 
 echo
 echo "Relatórios em: $OUT/index.html"
