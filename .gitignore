@@ -11,3 +11,7 @@ __pycache__/
 
 # --- Testes (Vitest) ---
 coverage/
+
+# Resultados gerados pelos testes de carga
+load-tests/scale-results.json
+.stryker-tmp/

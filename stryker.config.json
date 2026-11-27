@@ -22,5 +22,11 @@
     "break": 80
   },
   "concurrency": 4,
-  "incremental": true
+  "incremental": true,
+  "ignorePatterns": [
+    "load-tests/.venv/**",
+    "tests/load/.venv/**",
+    "coverage/**",
+    "reports/**"
+  ]
 }
