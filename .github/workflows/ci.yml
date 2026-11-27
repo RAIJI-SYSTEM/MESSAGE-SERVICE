@@ -171,6 +171,13 @@ jobs:
         working-directory: e2e
         run: npx playwright test --reporter=list,html
 
+      - name: Validar auditoria no Mongo
+        run: |
+          sleep 2
+          total=$(docker exec raiji-chat-mongo mongosh raiji --quiet --eval 'db.audit_events.countDocuments()')
+          echo "audit_events=$total"
+          [ "$total" -gt 0 ]
+
       - name: Logs da stack (em caso de falha)
         if: failure()
         run: docker compose --project-directory "$RUNNER_TEMP/avxae-core-monolith" \

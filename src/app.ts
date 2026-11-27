@@ -3,6 +3,8 @@ import { z } from "zod";
 import conversationRoutes from "./modules/conversations/conversation.routes";
 import { startExpirationJob } from "./modules/conversations/expiration.job";
 import groupRoutes from "./modules/conversations/group.routes";
+import auditRoutes from "./modules/audit/audit.routes";
+import audit from "./modules/audit/audit.plugin";
 import messageRoutes from "./modules/messages/message.routes";
 import userRoutes from "./modules/users/user.routes";
 import auth from "./plugins/auth";
@@ -32,6 +34,8 @@ export function buildApp() {
   app.register(mongo);
   app.register(rabbitmq); // depois do mongo: os eventos gravam no banco
   app.register(auth);
+  app.register(audit); // hooks globais de auditoria (log JSON + Mongo)
+  app.register(auditRoutes);
   app.register(userRoutes);
   app.register(conversationRoutes);
   app.register(groupRoutes);
